@@ -11,53 +11,19 @@
 """
 
 import os
-import subprocess
 import sys
-import time
-import warnings
-
-from setuptools import setup, find_packages, Command
+from setuptools import setup
+import pkg_version_mgr as pv
+import aioping.version as version
 
 PACKAGE_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-#VERBOSE = True
-VERBOSE = False
-
-def _error(msg):
-    if VERBOSE:
-        warnings.warn(msg)
-    return ""
-
-def get_version_from_git():
-    try:
-        process = subprocess.Popen(
-            # %ct: committer date, UNIX timestamp
-            ["/usr/bin/git", "describe", "--tags", "--dirty=+dirty"],
-            shell=False, cwd=PACKAGE_ROOT,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-    except Exception as err:
-        return _error("Can't get git hash: %s" % err)
-
-    process.wait()
-    returncode = process.returncode
-    if returncode != 0:
-        return _error(
-            "Can't get git hash, returncode was: %r"
-            " - git stdout: %r"
-            " - git stderr: %r"
-            % (returncode, process.stdout.readline(), process.stderr.readline())
-        )
-
-    output = process.stdout.readline().strip().decode('utf-8')
-    output = output.replace("-g","+git")
-    return output
-
-
 # convert creole to ReSt on-the-fly, see also:
-# https://code.google.com/p/python-creole/wiki/UseInSetup
+# https://github.com/jedie/python-creole/wiki/Use-In-Setup
+# TODO: Migrate from using `get_long_description` since it's deprecated
 try:
+    # noinspection PyPackageRequirements
     from creole.setup_utils import get_long_description
 except ImportError:
     if "register" in sys.argv or "sdist" in sys.argv or "--long-description" in sys.argv:
@@ -70,49 +36,23 @@ else:
 
 
 def get_authors():
-    authors = []
-    try:
-        f = file(os.path.join(PACKAGE_ROOT, "AUTHORS"), "r")
-        for line in f:
-            if not line.strip().startswith("*"):
-                continue
-            if "--" in line:
-                line = line.split("--", 1)[0]
-            authors.append(line.strip(" *\r\n"))
-        f.close()
-        authors.sort()
-    except Exception as err:
-        authors = "[Error: %s]" % err
-    return authors
+    with open(os.path.join(PACKAGE_ROOT, 'AUTHORS')) as fp:
+        lines = [line.strip().lstrip('* ') for line in fp if "* " in line]
+        lines = [line.split('--', 1) for line in lines if '--' in line]
+
+    return sorted(lines)
+
+
+ver_mgr = pv.PkgVersionMgr(major=0, minor=6, micro=0, suffix='dev', suffix_num=1)
 
 
 setup(
-    name='aioping',
-    version=get_version_from_git(),
-    description='An async python ICMP ping implementation using raw sockets.',
+    version=ver_mgr.version(target_module=version),
     long_description=long_description,
     author=get_authors(),
     author_email="matthias@urlichs.de",
-    maintainer="Matthias Urlichs",
-    maintainer_email="matthias@urlichs.de",
-    url='https://github.com/M-o-a-T/aioping/',
-    keywords="asyncio ping icmp network latency",
-    packages=find_packages(),
-    include_package_data=True,
+    maintainer="Curtis Forrester",
+    maintainer_email="crforresterspam@pm.me",
     zip_safe=False,
-    scripts=["scripts/ping"],
-    classifiers=[
-        # http://pypi.python.org/pypi?%3Aaction=list_classifiers
-#        "Development Status :: 4 - Beta",
-        "Development Status :: 5 - Production/Stable",
-        "Intended Audience :: Developers",
-        "License :: OSI Approved :: GNU General Public License (GPL)",
-        "Operating System :: OS Independent",
-        "Programming Language :: Python",
-        "Programming Language :: Python :: 3.5",
-        "Programming Language :: Python :: 3.6",
-        "Topic :: Internet",
-        "Topic :: System :: Networking :: Monitoring",
-    ],
-    # test_suite="tests",
+    install_requires=['pkg-version-mgr', 'python-creole'],
 )
