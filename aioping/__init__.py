@@ -30,7 +30,6 @@ from __future__ import division, print_function
 
 """
 
-# TODO Remove any calls to time.sleep
 # This would enable extension into larger framework that aren't multi threaded.
 import os
 import sys
@@ -39,20 +38,22 @@ import array
 import fcntl
 import socket
 import struct
-import select
 import signal
 import asyncio
-import traceback
 
 __all__ = "Ping Verbose VerbosePing ping verbose_ping simple_ping".split()
 
 if __name__ == '__main__':
     import argparse
 
+
 class NoAddressFound(OSError):
     pass
+
+
 class ICMPError(OSError):
     pass
+
 
 try:
     from _thread import get_ident
@@ -82,6 +83,14 @@ class MStats2(object):
 
     def __init__(self):
         self._this_ip = '0.0.0.0'
+        self._median_time = None
+        self._total_time = 0
+        self._pstdev_time = None
+        self._frac_loss = None
+        self._timing_list = []
+        self._packets_sent = 0
+        self._packets_rcvd = 0
+
         self.reset()
 
     def reset(self):
@@ -92,44 +101,47 @@ class MStats2(object):
         self._reset_statistics()
 
     @property
-    def thisIP(self):
+    def this_ip(self):
         return self._this_ip
 
-    @thisIP.setter
-    def thisIP(self, value):
+    @this_ip.setter
+    def this_ip(self, value):
         self._this_ip = value
 
     @property
-    def pktsSent(self):
+    def pkts_sent(self):
         return self._packets_sent
 
     @property
-    def pktsRcvd(self):
+    def pkts_rcvd(self):
         return self._packets_rcvd
 
     @property
-    def pktsLost(self):
+    def pkts_lost(self):
         return self._packets_sent - self._packets_rcvd
 
     @property
-    def minTime(self):
+    def min_time(self):
         return min(self._timing_list) if self._timing_list else None
 
     @property
-    def maxTime(self):
+    def max_time(self):
         return max(self._timing_list) if self._timing_list else None
 
     @property
-    def totTime(self):
-        if self._total_time is None:
-            self._total_time = sum(self._timing_list)
-        return self._total_time
+    def tot_time(self):
+        # if self._total_time is None:
+        #     self._total_time = sum(self._timing_list)
+        # return self._total_time
+        return sum(self._timing_list)
 
     def _get_mean_time(self):
-        if self._mean_time is None:
-            if len(self._timing_list) > 0:
-                self._mean_time = self.totTime / len(self._timing_list)
-        return self._mean_time
+        # if self._mean_time is None:
+        #     if len(self._timing_list) > 0:
+        #         self._mean_time = self.tot_time / len(self._timing_list)
+        # return self._mean_time
+        return self.tot_time / len(self._timing_list)
+
     mean_time = property(_get_mean_time)
     avrgTime = property(_get_mean_time)
 
@@ -142,16 +154,18 @@ class MStats2(object):
     @property
     def pstdev_time(self):
         """Returns the 'Population Standard Deviation' of the set."""
-        if self._pstdev_time is None:
-            self._pstdev_time = self._calc_pstdev_time()
-        return self._pstdev_time
+        # if self._pstdev_time is None:
+        #     self._pstdev_time = self._calc_pstdev_time()
+        # return self._pstdev_time
+        return self._calc_pstdev_time()
 
     @property
-    def fracLoss(self):
-        if self._frac_loss is None:
-            if self.pktsSent > 0:
-                self._frac_loss = self.pktsLost / self.pktsSent
-        return self._frac_loss
+    def frac_loss(self):
+        # if self._frac_loss is None:
+        #     if self.pkts_sent > 0:
+        #         self._frac_loss = self.pkts_lost / self.pkts_sent
+        # return self._frac_loss
+        return self.pkts_lost / self.pkts_sent
 
     def packet_sent(self, n=1):
         self._packets_sent += n
@@ -178,16 +192,16 @@ class MStats2(object):
             return sorted(self._timing_list)[n // 2]
         # Even number of samples? Return the mean of the two middle samples.
         else:
-            halfn = n // 2
-            return sum(sorted(self._timing_list)[halfn - 1:halfn + 1]) / 2
+            half_n = n // 2
+            return sum(sorted(self._timing_list)[half_n - 1:half_n + 1]) / 2
 
     def _calc_sum_square_time(self):
         mean = self.mean_time
-        return sum(((t - mean)**2 for t in self._timing_list))
+        return sum(((t - mean) ** 2 for t in self._timing_list))
 
     def _calc_pstdev_time(self):
         pvar = self._calc_sum_square_time() / len(self._timing_list)
-        return pvar**0.5
+        return pvar ** 0.5
 
 
 def _checksum(source_string):
@@ -197,8 +211,9 @@ def _checksum(source_string):
     packed), but this works.
     Network data is big-endian, hosts are typically little-endian
     """
-    if (len(source_string) % 2):
+    if len(source_string) % 2:
         source_string += "\x00"
+
     converted = array.array("H", source_string)
     if sys.byteorder == "big":
         converted.bytewap()
@@ -214,27 +229,40 @@ def _checksum(source_string):
 
     return answer
 
+
 _next_id = 1
 
+
 class Ping(object):
-    def __init__(self, destIP=None, hostname=None, interval=1, numDataBytes=64,
-            stats=None, ipv6=False, verbose=True, sourceIP=None,
-            sourceIntf=None, loop=None, count=3, timeout=5):
-        self.destIP = destIP
+    def __init__(self, dest_ip=None,
+                 hostname=None,
+                 interval=1,
+                 num_data_bytes=64,
+                 stats=None,
+                 ipv6=False,
+                 verbose=True,
+                 source_ip=None,
+                 source_intf=None,
+                 loop=None,
+                 count=3,
+                 timeout=5):
+        self.dest_ip = dest_ip
         self.hostname = hostname
         self.interval = interval
         self.count = count
         self.timeout = timeout
-        self.numDataBytes = numDataBytes
+        self.numDataBytes = num_data_bytes
         self.stats = stats
         self.ipv6 = ipv6
         self.verbose = verbose
-        self.sourceIP = sourceIP
-        self.sourceIntf = sourceIntf
+        self.sourceIP = source_ip
+        self.sourceIntf = source_intf
+        self.loop = loop or asyncio.get_event_loop()
 
-        if loop is None:
-            loop = asyncio.get_event_loop()
-        self.loop = loop
+        self.ID = _next_id
+        self.seqNumber = 0
+        self.startTime = None
+        self.queue = None
 
         self.socket = None
 
@@ -245,10 +273,8 @@ class Ping(object):
             self.socket = None
 
     async def init(self, hostname=None):
-        if hostname is None:
-            hostname = self.hostname
-        else:
-            self.destIP = None
+        hostname = hostname or self.hostname
+        self.dest_ip = None if hostname else self.dest_ip
 
         self.close()
 
@@ -265,9 +291,10 @@ class Ping(object):
         else:
             _next_id += 1
 
-        if self.destIP is None:
+        if self.dest_ip is None:
             if hostname is None:
                 raise RuntimeError("You need to set either hostname or destIP")
+
             for info in (await self.loop.getaddrinfo(hostname, None)):
                 if info[0] == socket.AF_INET6:
                     if self.ipv6 is False:
@@ -279,33 +306,34 @@ class Ping(object):
                     self.ipv6 = False
                 else:
                     continue
-                self.destIP = info[4][0]
+                self.dest_ip = info[4][0]
                 break
             else:
                 raise NoAddressFound(hostname)
 
         if self.ipv6:
             self.socket = socket.socket(socket.AF_INET6, socket.SOCK_RAW,
-                socket.getprotobyname("ipv6-icmp"))
+                                        socket.getprotobyname("ipv6-icmp"))
             self.socket.setsockopt(socket.IPPROTO_IPV6,
-                socket.IPV6_RECVHOPLIMIT, 1)
+                                   socket.IPV6_RECVHOPLIMIT, 1)
         else:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_RAW,
-                socket.getprotobyname("icmp"))
+                                        socket.getprotobyname("icmp"))
 
         if self.sourceIP is not None:
             self.socket.bind((self.sourceIP, 0))
 
         if self.sourceIntf is not None:
             try:
-                SO_BINDTODEVICE = socket.SO_BINDTODEVICE
+                so_bindtodevice = socket.SO_BINDTODEVICE
             except AttributeError:
-                SO_BINDTODEVICE = 25
-            self.socket.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE,
-                (self.sourceIntf + '\0').encode('utf-8'))
+                so_bindtodevice = 25
+
+            self.socket.setsockopt(socket.SOL_SOCKET, so_bindtodevice,
+                                   (self.sourceIntf + '\0').encode('utf-8'))
 
         if self.stats:
-            self.stats.thisIP = self.destIP
+            self.stats.this_ip = self.dest_ip
 
         # Don't block on the socket
         flag = fcntl.fcntl(self.socket.fileno(), fcntl.F_GETFL)
@@ -328,18 +356,19 @@ class Ping(object):
             recv = asyncio.wait_for(recv, timeout, loop=self.loop)
 
         recv = await recv
-        if isinstance(recv,Exception):
+        if isinstance(recv, Exception):
             raise recv
-        recvTime, dataSize, iphSrcIP, icmpSeqNumber, iphTTL = recv
 
-        delay = recvTime - self.startTime - icmpSeqNumber * self.interval
-        await self.pinged(recvTime=recvTime, delay=delay,
-            host=self.resolve_host(iphSrcIP), seqNum=icmpSeqNumber,
-            ttl=iphTTL, size=dataSize)
+        recv_time, data_size, iph_src_ip, icmp_seq_number, iph_ttl = recv
+
+        delay = recv_time - self.startTime - icmp_seq_number * self.interval
+        await self.pinged(recvTime=recv_time, delay=delay,
+                          host=self.resolve_host(iph_src_ip), seqNum=icmp_seq_number,
+                          ttl=iph_ttl, size=data_size)
 
         return delay
 
-    async def pinged(self, recvTime,delay,host,seqNum,ttl,size):
+    async def pinged(self, recvTime, delay, host, seqNum, ttl, size):
         """Hook to catch a successful ping"""
         pass
 
@@ -352,7 +381,7 @@ class Ping(object):
 
         assert self.interval > 0
 
-        while not self.count or self.stats.pktsRcvd < self.count:
+        while not self.count or self.stats.pkts_rcvd < self.count:
             now = default_timer()
             delay1 = self.seqNumber * self.interval - (now - self.startTime)
             while (not self.count or self.seqNumber < self.count) and delay1 <= 0:
@@ -361,7 +390,7 @@ class Ping(object):
             if self.count and self.seqNumber >= self.count:
                 delay1 = None
             if self.timeout is not None:
-                delay2 = self.startTime+self.timeout - now
+                delay2 = self.startTime + self.timeout - now
                 if delay2 < 0:
                     break
                 if delay1 is None or delay1 > delay2:
@@ -370,20 +399,20 @@ class Ping(object):
                 recv = self.queue.get()
                 if delay1 is not None:
                     recv = asyncio.wait_for(recv, delay1,
-                        loop=self.loop)
+                                            loop=self.loop)
                 recv = await recv
-                if isinstance(recv,Exception): # error
+                if isinstance(recv, Exception):  # error
                     raise recv
-                recvTime, dataSize, iphSrcIP, icmpSeqNumber, iphTTL = recv
-                delay = recvTime - self.startTime - icmpSeqNumber * self.interval
-                await self.pinged(recvTime=recvTime, delay=delay,
-                    host=self.resolve_host(iphSrcIP), seqNum=icmpSeqNumber,
-                    ttl=iphTTL, size=dataSize)
+                recv_time, data_size, iph_src_ip, icmp_seq_number, iph_ttl = recv
+                delay = recv_time - self.startTime - icmp_seq_number * self.interval
+                await self.pinged(recvTime=recv_time, delay=delay,
+                                  host=self.resolve_host(iph_src_ip), seqNum=icmp_seq_number,
+                                  ttl=iph_ttl, size=data_size)
 
             except asyncio.TimeoutError:
                 pass
 
-        return self.stats.pktsRcvd
+        return self.stats.pkts_rcvd
 
     def resolve_host(self, iphSrcIP):
         """TODO: actually resolve this address"""
@@ -396,46 +425,46 @@ class Ping(object):
 
         # Header is type (8), code (8), checksum (16), id (16), sequence (16)
         # (numDataBytes - 8) - Remove header size from packet size
-        myChecksum = 0
+        my_checksum = 0
 
         # Make a dummy heder with a 0 checksum.
         if self.ipv6:
             header = struct.pack(
-                "!BbHHh", ICMP_ECHO_IPV6, 0, myChecksum, self.ID, self.seqNumber
+                "!BbHHh", ICMP_ECHO_IPV6, 0, my_checksum, self.ID, self.seqNumber
             )
         else:
             header = struct.pack(
-                "!BBHHH", ICMP_ECHO, 0, myChecksum, self.ID, self.seqNumber
+                "!BBHHH", ICMP_ECHO, 0, my_checksum, self.ID, self.seqNumber
             )
 
-        padBytes = []
-        startVal = 0x42
-        for i in range(startVal, startVal + (self.numDataBytes - 8)):
-            padBytes += [(i & 0xff)]  # Keep chars in the 0-255 range
-        # data = bytes(padBytes)
-        data = bytearray(padBytes)
+        pad_bytes = []
+        start_val = 0x42
+        for i in range(start_val, start_val + (self.numDataBytes - 8)):
+            pad_bytes += [(i & 0xff)]  # Keep chars in the 0-255 range
+
+        data = bytearray(pad_bytes)
 
         # Calculate the checksum on the data and the dummy header.
-        myChecksum = _checksum(header + data)  # Checksum is in network order
+        my_checksum = _checksum(header + data)  # Checksum is in network order
 
         # Now that we have the right checksum, we put that in. It's just easier
         # to make up a new header than to stuff it into the dummy.
         if self.ipv6:
             header = struct.pack(
-                "!BbHHh", ICMP_ECHO_IPV6, 0, myChecksum, self.ID, self.seqNumber
+                "!BbHHh", ICMP_ECHO_IPV6, 0, my_checksum, self.ID, self.seqNumber
             )
         else:
             header = struct.pack(
-                "!BBHHH", ICMP_ECHO, 0, myChecksum, self.ID, self.seqNumber
+                "!BBHHH", ICMP_ECHO, 0, my_checksum, self.ID, self.seqNumber
             )
 
         packet = header + data
 
-        self.socket.sendto(packet, (self.destIP, 0))  # Port number is irrelevant
+        self.socket.sendto(packet, (self.dest_ip, 0))  # Port number is irrelevant
         if self.stats is not None:
             self.stats.packet_sent()
-        self.seqNumber += 1
 
+        self.seqNumber += 1
 
     def _receive(self):
         """
@@ -443,56 +472,63 @@ class Ping(object):
         """
 
         try:
-            timeReceived = default_timer()
+            time_received = default_timer()
 
             # iphDestIP is the original address from 
-            recPacket, ancdata, flags, addr = self.socket.recvmsg(ICMP_MAX_RECV)
+            rec_packet, anc_data, flags, addr = self.socket.recvmsg(ICMP_MAX_RECV)
             if self.ipv6:
-                icmpHeader = recPacket[0:8]
+                icmp_header = rec_packet[0:8]
             else:
-                icmpHeader = recPacket[20:28]
-            icmpType, icmpCode, icmpChecksum, icmpPacketID, icmpSeqNumber \
-                = struct.unpack("!BBHHH", icmpHeader)
+                icmp_header = rec_packet[20:28]
 
+            icmp_type, icmp_code, icmp_checksum, icmp_packet_id, icmp_seq_number \
+                = struct.unpack("!BBHHH", icmp_header)
+
+            iph_dest_ip = ''
             if self.ipv6:
-                iphSrcIP = addr[0]
-                if icmpType not in (ICMP_ECHO_IPV6, ICMP_ECHO_IPV6_REPLY):
-                    iphDestIP = socket.inet_ntop(socket.AF_INET6,
-                        recPacket[32:48])
-                iphTTL = 0
-                if len(ancdata) == 1:
-                    cmsg_level, cmsg_type, cmsg_data = ancdata[0]
+                iph_src_ip = addr[0]
+                if icmp_type not in (ICMP_ECHO_IPV6, ICMP_ECHO_IPV6_REPLY):
+                    iph_dest_ip = socket.inet_ntop(socket.AF_INET6,
+                                                   rec_packet[32:48])
+                iph_ttl = 0
+                if len(anc_data) == 1:
+                    cmsg_level, cmsg_type, cmsg_data = anc_data[0]
                     a = array.array("i")
                     a.frombytes(cmsg_data)
-                    iphTTL = a[0]
+                    iph_ttl = a[0]
             else:
-                ipHeader = recPacket[:20]
-                iphVersion, iphTypeOfSvc, iphLength, iphID, iphFlags, iphTTL, \
-                    iphProtocol, iphChecksum, iphSrcIP, iphDestIP = struct.unpack(
-                        "!BBHHHBBHII", ipHeader)
-                iphSrcIP = socket.inet_ntop(socket.AF_INET,
-                    struct.pack("!I", iphSrcIP))
-                if icmpType not in (ICMP_ECHO, ICMP_ECHOREPLY):
-                    iphDestIP = socket.inet_ntop(socket.AF_INET,
-                        recPacket[44:48])
+                ip_header = rec_packet[:20]
+                iph_version, iph_type_of_svc, iph_length, iph_id, iph_flags, iph_ttl, \
+                    iph_protocol, iph_checksum, iph_src_ip, iph_dest_ip = struct.unpack(
+                        "!BBHHHBBHII", ip_header)
 
-            if icmpType in (ICMP_ECHOREPLY, ICMP_ECHO_IPV6_REPLY):
+                iph_src_ip = socket.inet_ntop(socket.AF_INET,
+                                              struct.pack("!I", iph_src_ip))
+
+                if icmp_type not in (ICMP_ECHO, ICMP_ECHOREPLY):
+                    iph_dest_ip = socket.inet_ntop(socket.AF_INET,
+                                                   rec_packet[44:48])
+
+            if icmp_type in (ICMP_ECHOREPLY, ICMP_ECHO_IPV6_REPLY):
                 # Reply to our packet?
-                if icmpPacketID == self.ID:
-                    dataSize = len(recPacket) - 28
+                if icmp_packet_id == self.ID:
+                    data_size = len(rec_packet) - 28
+
                     if self.stats is not None:
                         self.stats.packet_received()
-                        delay = timeReceived - self.startTime - icmpSeqNumber * self.interval
+                        delay = time_received - self.startTime - icmp_seq_number * self.interval
                         self.stats.record_time(delay)
-                    self.queue.put_nowait((timeReceived, (dataSize + 8), iphSrcIP, \
-                        icmpSeqNumber, iphTTL))
-            elif icmpType not in (ICMP_ECHO, ICMP_ECHO_IPV6) \
-                    and iphDestIP == self.destIP:
+
+                    self.queue.put_nowait((time_received, (data_size + 8), iph_src_ip,
+                                           icmp_seq_number, iph_ttl))
+
+            elif icmp_type not in (ICMP_ECHO, ICMP_ECHO_IPV6) \
+                    and iph_dest_ip == self.dest_ip:
                 # TODO improve error reporting. XXX: need to re-use the
                 # socket, otherwise we won't get host-unreachable errors.
-                self.queue.put_nowait(ICMPError(icmpType,icmpCode))
+                self.queue.put_nowait(ICMPError(icmp_type, icmp_code))
 
-        except BaseException as exc:
+        except BaseException:
             self.loop.stop()
             raise
 
@@ -500,26 +536,27 @@ class Ping(object):
         """
         Show stats when pings are done
         """
-        myStats = self.stats
-        if myStats is None:
+        my_stats = self.stats
+        if my_stats is None:
             return
 
-        print("\n----%s PYTHON PING Statistics----" % (myStats.thisIP))
+        print("\n----%s PYTHON PING Statistics----" % my_stats.this_ip)
 
         print("%d packets transmitted, %d packets received, %0.1f%% packet loss"
-            % (myStats.pktsSent, myStats.pktsRcvd, 100.0 * myStats.fracLoss))
+              % (my_stats.pkts_sent, my_stats.pkts_rcvd, 100.0 * my_stats.frac_loss))
 
-        if myStats.pktsRcvd > 0:
+        if my_stats.pkts_rcvd > 0:
             print("round-trip (ms)  min/avg/max = %0.1f/%0.1f/%0.1f" % (
-                myStats.minTime*1000, myStats.avrgTime*1000, myStats.maxTime*1000
+                my_stats.min_time * 1000, my_stats.avrgTime * 1000, my_stats.max_time * 1000
             ))
             print('                 median/pstddev = %0.2f/%0.2f' % (
-                myStats.median_time*1000, myStats.pstdev_time*1000
+                my_stats.median_time * 1000, my_stats.pstdev_time * 1000
             ))
 
         print('')
         return
 
+    # noinspection PyUnusedLocal
     def _signal_handler(self, signum, frame):
         """ Handle exit via signals """
         self.print_stats()
@@ -534,13 +571,17 @@ class Ping(object):
 
 class Verbose(object):
     """A mix-in class to print a message when each ping os received"""
+
     async def pinged(self, **kw):
+        # noinspection PyUnresolvedReferences
         await super().pinged(**kw)
         print("%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms" % (
-            kw['size'], kw['host'], kw['seqNum'], kw['ttl'], kw['delay']*1000))
+            kw['size'], kw['host'], kw['seqNum'], kw['ttl'], kw['delay'] * 1000))
 
-class VerbosePing(Verbose,Ping):
+
+class VerbosePing(Verbose, Ping):
     pass
+
 
 async def ping(dest_addr, timeout=10, **kw):
     """
@@ -548,18 +589,46 @@ async def ping(dest_addr, timeout=10, **kw):
     @dest_addr: host name or IP address to ping.
     @timeout: maximum delay.
     """
-    ping = Ping(dest_addr, **kw)
-    await ping.init()
-    res = ping.single()
+    _ping = Ping(dest_addr, **kw)
+    await _ping.init()
+    res = _ping.single()
     if timeout:
-        res = asyncio.wait_for(res, timeout, loop=ping.loop)
+        res = asyncio.wait_for(res, timeout, loop=_ping.loop)
     res = await res
-    ping.close()
+    _ping.close()
     return res
+
+
+async def ping_stats(ip_addr: str = None, timeout=None, hostname: str = None, stats: MStats2 = None, **kwargs) -> MStats2:
+    """Ping and return stats.
+
+    :param ip_addr:
+    :param timeout:
+    :param hostname:
+    :param stats: Stats object to update or None to create new.
+    :param kwargs:
+    :return:
+    """
+    stats = stats or MStats2()
+
+    _ping = Ping(dest_ip=ip_addr, hostname=hostname, timeout=timeout, stats=stats, **kwargs)
+
+    await _ping.init()
+    # res = _ping.single(timeout=timeout)
+    res = await _ping.run()
+
+    if timeout:
+        res = asyncio.wait_for(res, timeout, loop=_ping.loop)
+
+    _ping.close()
+
+    return stats
+
 
 single_ping = ping
 
-async def verbose_ping(dest_addr, verbose=True, stats=False, handle_signals=None, timeout=5, count=3, **kw):
+
+async def verbose_ping(dest_addr, verbose=True, want_stats=False, handle_signals=None, timeout=5, count=3, **kw):
     """
     Send @count ping to @destIP with the given @timeout, and display
     the result.
@@ -574,28 +643,36 @@ async def verbose_ping(dest_addr, verbose=True, stats=False, handle_signals=None
     """
     if 'stats' not in kw:
         kw['stats'] = MStats2()
-    ping = VerbosePing(verbose=verbose, count=count, **kw)
+
+    _ping = VerbosePing(verbose=verbose, timeout=timeout, count=count, **kw)
+
     if handle_signals is None:
         handle_signals = (not count)
-    if handle_signals:
-        ping.add_signal_handler()
-    await ping.init(dest_addr)
-    res = await ping.run()
-    if verbose:
-        ping.print_stats()
-    ping.close()
 
-    if stats:
-        return stats
+    if handle_signals:
+        _ping.add_signal_handler()
+
+    await _ping.init(dest_addr)
+    res = await _ping.run()
+
+    if verbose:
+        _ping.print_stats()
+
+    _ping.close()
+
+    if want_stats:
+        return kw['stats']
+
     return res
+
 
 if __name__ == "__main__":
     from pprint import pprint
-    loop = asyncio.get_event_loop()
 
-    for p in (ping,verbose_ping):
+    _loop = asyncio.get_event_loop()
+
+    for p in (ping, verbose_ping):
         tasks = []
         for host in "heise.de google.com not-available.invalid 192.168.1.111".split(" "):
             tasks.append(asyncio.ensure_future(p(host)))
-        pprint(loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True)))
-
+        pprint(_loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True)))
